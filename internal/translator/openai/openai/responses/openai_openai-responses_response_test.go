@@ -35,6 +35,7 @@ func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_ResponseCompleted
 		doneInputIndex int // Index in tt.in where the terminal [DONE] chunk arrives and response.completed must be emitted.
 		hasUsage       bool
 		inputTokens    int64
+		cachedTokens   int64
 		outputTokens   int64
 		totalTokens    int64
 	}{
@@ -53,6 +54,22 @@ func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_ResponseCompleted
 			inputTokens:    11,
 			outputTokens:   7,
 			totalTokens:    18,
+		},
+		{
+			// mlx-lm emits its final usage-only streaming record with object=chat.completion
+			// rather than object=chat.completion.chunk. Preserve its usage before [DONE].
+			name: "late usage with chat completion object",
+			in: []string{
+				`data: {"id":"resp_mlx_usage","object":"chat.completion.chunk","created":1773896263,"model":"model","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`,
+				`data: {"id":"resp_mlx_usage","object":"chat.completion","created":1773896263,"model":"model","choices":[],"usage":{"prompt_tokens":23,"completion_tokens":9,"total_tokens":32,"prompt_tokens_details":{"cached_tokens":5}}}`,
+				`data: [DONE]`,
+			},
+			doneInputIndex: 2,
+			hasUsage:       true,
+			inputTokens:    23,
+			cachedTokens:   5,
+			outputTokens:   9,
+			totalTokens:    32,
 		},
 		{
 			// When usage arrives on the same chunk as finish_reason, we still expect a
@@ -152,6 +169,9 @@ func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_ResponseCompleted
 			// When usage is present, the final response.completed event must preserve the usage values.
 			if got := completedData.Get("response.usage.input_tokens").Int(); got != tt.inputTokens {
 				t.Fatalf("unexpected response.usage.input_tokens: got %d want %d", got, tt.inputTokens)
+			}
+			if got := completedData.Get("response.usage.input_tokens_details.cached_tokens").Int(); got != tt.cachedTokens {
+				t.Fatalf("unexpected response.usage.input_tokens_details.cached_tokens: got %d want %d", got, tt.cachedTokens)
 			}
 			if got := completedData.Get("response.usage.output_tokens").Int(); got != tt.outputTokens {
 				t.Fatalf("unexpected response.usage.output_tokens: got %d want %d", got, tt.outputTokens)
