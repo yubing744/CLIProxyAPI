@@ -291,10 +291,14 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 	root := gjson.ParseBytes(rawJSON)
 	if !isDone {
 		obj := root.Get("object")
-		if obj.Exists() && obj.String() != "" && obj.String() != "chat.completion.chunk" {
+		choices := root.Get("choices")
+		if !choices.Exists() || !choices.IsArray() {
 			return [][]byte{}
 		}
-		if !root.Get("choices").Exists() || !root.Get("choices").IsArray() {
+		objectType := obj.String()
+		isCompletionChunk := objectType == "" || objectType == "chat.completion.chunk"
+		isUsageOnlyCompletion := objectType == "chat.completion" && len(choices.Array()) == 0 && root.Get("usage").Exists()
+		if !isCompletionChunk && !isUsageOnlyCompletion {
 			return [][]byte{}
 		}
 	}
