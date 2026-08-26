@@ -1,0 +1,39 @@
+name: ornith-canary-build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-darwin-arm64:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test Responses translation and executor paths
+        run: |
+          go test ./internal/translator/openai/openai/responses -count=1
+          go test ./internal/runtime/executor/helps -run 'Usage|Responses' -count=1
+          go test ./internal/runtime/executor -run 'OpenAICompat|Responses|Usage' -count=1
+      - name: Build CLIProxyAPI
+        env:
+          RELEASE_VERSION: 7.2.142-ornith.3
+        run: |
+          commit="$(git rev-parse --short HEAD)"
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build \
+            -ldflags="-s -w -X main.Version=${RELEASE_VERSION} -X main.Commit=${commit} -X main.BuildDate=${build_date}" \
+            -o cli-proxy-api ./cmd/server/
+          shasum -a 256 cli-proxy-api > cli-proxy-api.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ornith-darwin-arm64
+          path: |
+            cli-proxy-api
+            cli-proxy-api.sha256
+          if-no-files-found: error
