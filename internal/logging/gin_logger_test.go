@@ -128,13 +128,16 @@ func TestGinLogrusLoggerAddsRequestIDForCodexBackend(t *testing.T) {
 
 	var requestIDFromContext string
 	var requestIDFromGin string
+	var requestIDFromHeader string
 	engine.POST("/backend-api/codex/responses", func(c *gin.Context) {
 		requestIDFromContext = GetRequestID(c.Request.Context())
 		requestIDFromGin = GetGinRequestID(c)
+		requestIDFromHeader = c.Request.Header.Get("X-Proxy-Request-ID")
 		c.Status(http.StatusOK)
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/backend-api/codex/responses", nil)
+	req.Header.Set("X-Proxy-Request-ID", "client-spoofed")
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
 
@@ -146,5 +149,8 @@ func TestGinLogrusLoggerAddsRequestIDForCodexBackend(t *testing.T) {
 	}
 	if requestIDFromGin != requestIDFromContext {
 		t.Fatalf("expected Gin request ID %q to match context request ID %q", requestIDFromGin, requestIDFromContext)
+	}
+	if requestIDFromHeader != requestIDFromContext {
+		t.Fatalf("expected forwarded request ID %q to match context request ID %q", requestIDFromHeader, requestIDFromContext)
 	}
 }
