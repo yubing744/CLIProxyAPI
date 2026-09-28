@@ -411,6 +411,7 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 		}
 	}
 	newCtx, cancel := context.WithCancel(parentCtx)
+	requestStarted := time.Now()
 
 	endpoint := ""
 	if c != nil && c.Request != nil {
@@ -445,6 +446,7 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 		go func() {
 			select {
 			case <-requestCtx.Done():
+				logRequestCancellation(cancelCtx, "request_context_done", requestCtx.Err(), requestStarted, nil)
 				cancel()
 			case <-cancelCtx.Done():
 			}
@@ -452,7 +454,15 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 	}
 	newCtx = context.WithValue(newCtx, "gin", c)
 	newCtx = context.WithValue(newCtx, "handler", handler)
+	var returnLogged sync.Once
 	return newCtx, func(params ...interface{}) {
+		returnLogged.Do(func() {
+			var terminalError error
+			if len(params) == 1 {
+				terminalError, _ = params[0].(error)
+			}
+			logRequestCancellation(cancelCtx, "handler_return", terminalError, requestStarted, c)
+		})
 		if c != nil {
 			logging.SetResponseStatus(cancelCtx, c.Writer.Status())
 		}
