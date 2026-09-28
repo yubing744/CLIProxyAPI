@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -37,10 +38,14 @@ func logRequestCancellation(ctx context.Context, event string, err error, starte
 		"reason":     cancellationClass(err),
 		"elapsed_ms": time.Since(started).Milliseconds(),
 	}
+	// The production formatter filters structured fields. Render these bounded
+	// values explicitly so the diagnostic survives the real log output path.
+	message := fmt.Sprintf("request_cancel_trace event=%s reason=%s elapsed_ms=%d", event, fields["reason"], fields["elapsed_ms"])
 	if c != nil && c.Request != nil {
 		fields["request_context"] = cancellationClass(c.Request.Context().Err())
 		fields["response_status"] = c.Writer.Status()
 		fields["headers_committed"] = c.Writer.Written()
+		message += fmt.Sprintf(" request_context=%s response_status=%d headers_committed=%t", fields["request_context"], fields["response_status"], fields["headers_committed"])
 	}
-	log.WithFields(fields).Info("request_cancel_trace")
+	log.WithFields(fields).Info(message)
 }

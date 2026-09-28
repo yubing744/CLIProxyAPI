@@ -60,11 +60,15 @@ func TestCancellationTraceSeparatesClientCancellationFromHandlerErrorAfter200(t 
 		finish(nil)
 		returns, clientEvents := 0, 0
 		for _, entry := range hook.AllEntries() {
-			if entry.Message != "request_cancel_trace" {
+			if !strings.HasPrefix(entry.Message, "request_cancel_trace ") {
 				continue
 			}
 			if strings.Contains(fmt.Sprint(entry.Data), "private") {
 				t.Fatal("private contents in trace")
+			}
+			formatted, formatErr := (&logging.LogFormatter{}).Format(entry)
+			if formatErr != nil || !strings.Contains(string(formatted), "[abcdef01]") || !strings.Contains(string(formatted), "event="+fmt.Sprint(entry.Data["event"])) || !strings.Contains(string(formatted), "elapsed_ms=") || strings.Contains(string(formatted), "private") {
+				t.Fatalf("production formatter lost diagnostic fields: %s (%v)", formatted, formatErr)
 			}
 			if entry.Data["event"] == "request_context_done" {
 				clientEvents++
@@ -77,6 +81,9 @@ func TestCancellationTraceSeparatesClientCancellationFromHandlerErrorAfter200(t 
 				}
 				if entry.Data["reason"] != want || entry.Data["response_status"] != 200 || entry.Data["headers_committed"] != true {
 					t.Fatalf("unexpected terminal fields: %v", entry.Data)
+				}
+				if !strings.Contains(string(formatted), "response_status=200 headers_committed=true") || !strings.Contains(string(formatted), "reason="+want) {
+					t.Fatalf("missing committed response or reason in production log: %s", formatted)
 				}
 			}
 		}
