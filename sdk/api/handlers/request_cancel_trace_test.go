@@ -145,6 +145,56 @@ func TestCancellationOriginClassifiersBoundValues(t *testing.T) {
 	}
 }
 
+// net/http preserves IPv6 interface zones in RemoteAddr. Classify the host
+// returned by requestClientIP; do not mistake a scoped IP for a caller name.
+func TestCancellationOriginScopedRemoteAddr(t *testing.T) {
+	for _, row := range []struct{ remote, want string }{
+		{"[fe80::1%fixture-interface]:43123", "private"},
+		{"[fd00::1%fixture-interface]:43123", "private"},
+		{"[::1%fixture-interface]:43123", "loopback"},
+		{"[::ffff:127.0.0.1]:43123", "loopback"},
+		{"[::ffff:10.0.0.1%fixture-interface]:43123", "private"},
+		{"[2001:db8::1%fixture-interface]:43123", "other_ip"},
+		{"private-host-name:43123", "non_ip"},
+		{"127.0.0.1%fixture-interface:43123", "non_ip"},
+		{"[fe80::bad::1%fixture-interface]:43123", "non_ip"},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		req.RemoteAddr = row.remote
+		if got := peerClass(requestClientIP(req)); got != row.want {
+			t.Errorf("scoped peer class got %s want %s", got, row.want)
+		}
+	}
+}
+
+func TestScopedCancellationOriginKeepsRawPeerOutOfFormattedLog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousHooks := log.StandardLogger().ReplaceHooks(make(log.LevelHooks))
+	hook := test.NewGlobal()
+	defer func() { log.StandardLogger().ReplaceHooks(previousHooks) }()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(
+		logging.WithRequestID(context.Background(), "abcd0123"))
+	c.Request.RemoteAddr = "[fe80::1%fixture-private-interface]:43123"
+	c.Request.Header.Set("User-Agent", "Codex/fixture-private-agent")
+	h := &BaseAPIHandler{Cfg: &config.SDKConfig{}}
+	_, finish := h.GetContextWithCancel(nil, c, c.Request.Context())
+	finish(context.Canceled)
+	entries := hook.AllEntries()
+	if len(entries) != 1 {
+		t.Fatalf("expected one terminal log, got %d", len(entries))
+	}
+	formatted, err := (&logging.LogFormatter{}).Format(entries[0])
+	if err != nil || !strings.Contains(string(formatted), "client_family=codex peer_class=private ") {
+		t.Fatal("scoped classification missing from production formatter")
+	}
+	for _, forbidden := range []string{"fe80::", "fixture-private-interface", "fixture-private-agent", "43123"} {
+		if strings.Contains(string(formatted), forbidden) || strings.Contains(fmt.Sprint(entries[0].Data), forbidden) {
+			t.Fatal("raw client metadata leaked into cancellation log")
+		}
+	}
+}
+
 func TestCancellationOriginSeparatesRequestAndParentDeadlines(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	requestCtx, requestCancel := context.WithTimeout(context.Background(), 2*time.Second)

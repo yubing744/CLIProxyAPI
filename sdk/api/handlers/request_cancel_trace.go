@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -42,13 +42,17 @@ func clientFamily(value string) string {
 }
 
 func peerClass(value string) string {
-	if strings.TrimSpace(value) == "" {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return "missing"
 	}
-	ip := net.ParseIP(value)
-	if ip == nil {
+	ip, err := netip.ParseAddr(value)
+	if err != nil {
 		return "non_ip"
 	}
+	// ParseAddr accepts IPv6 zones from net/http RemoteAddr. Unmap keeps
+	// IPv4-mapped loopback/private peers equivalent to their IPv4 form.
+	ip = ip.Unmap()
 	if ip.IsLoopback() {
 		return "loopback"
 	}
