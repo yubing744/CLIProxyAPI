@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	log "github.com/sirupsen/logrus"
 )
@@ -17,6 +19,25 @@ type cancellationOriginKey struct{}
 type cancellationOrigin struct {
 	clientFamily, peerClass, requestDeadline, parentDeadline string
 	transport                                                logging.TransportConnection
+	clientRequestMarker, clientRequestHash                   string
+}
+
+// An opt-in request nonce, never an authenticated identity. Accept only one
+// canonical random UUID so arbitrary headers, session IDs and secrets cannot
+// become log contents. Keep a domain-separated digest, not the original value.
+func clientRequestMarker(values []string) (string, string) {
+	if len(values) == 0 {
+		return "missing", "missing"
+	}
+	if len(values) != 1 || len(values[0]) != 36 {
+		return "invalid", "missing"
+	}
+	id, err := uuid.Parse(values[0])
+	if err != nil || id.Version() != 4 || id.Variant() != uuid.RFC4122 || id.String() != strings.ToLower(values[0]) {
+		return "invalid", "missing"
+	}
+	digest := sha256.Sum256([]byte("ornith-client-request-v1:" + id.String()))
+	return "uuid_v4", fmt.Sprintf("%x", digest)
 }
 
 // These are unauthenticated hints, not caller identities. Never log raw UA,
@@ -127,6 +148,10 @@ func logRequestCancellation(ctx context.Context, event string, err error, starte
 		fields["transport_peer_class"] = origin.transport.PeerClass
 		message += fmt.Sprintf(" connection_id=%s transport_network=%s transport_peer_class=%s",
 			origin.transport.ID, origin.transport.Network, origin.transport.PeerClass)
+		fields["client_request_marker"] = origin.clientRequestMarker
+		fields["client_request_hash"] = origin.clientRequestHash
+		message += fmt.Sprintf(" client_request_marker=%s client_request_hash=%s",
+			origin.clientRequestMarker, origin.clientRequestHash)
 	}
 	if c != nil && c.Request != nil {
 		fields["request_context"] = cancellationClass(c.Request.Context().Err())

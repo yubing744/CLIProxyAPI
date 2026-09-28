@@ -441,11 +441,16 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 	newCtx = logging.WithResponseStatusHolder(newCtx)
 	newCtx = logging.WithResponseHeadersHolder(newCtx)
 	metadata := logging.GetClientRequestMetadata(newCtx)
+	markerClass, markerHash := clientRequestMarker(nil)
+	if c != nil && c.Request != nil {
+		markerClass, markerHash = clientRequestMarker(c.Request.Header.Values("X-Client-Request-ID"))
+	}
 	newCtx = context.WithValue(newCtx, cancellationOriginKey{}, cancellationOrigin{
 		clientFamily: clientFamily(metadata.UserAgent), peerClass: peerClass(metadata.ClientIP),
-		requestDeadline: deadlineClass(requestCtx, requestStarted),
-		parentDeadline:  deadlineClass(parentCtx, requestStarted),
-		transport:       logging.GetTransportConnection(requestCtx),
+		requestDeadline:     deadlineClass(requestCtx, requestStarted),
+		parentDeadline:      deadlineClass(parentCtx, requestStarted),
+		transport:           logging.GetTransportConnection(requestCtx),
+		clientRequestMarker: markerClass, clientRequestHash: markerHash,
 	})
 
 	cancelCtx := newCtx
