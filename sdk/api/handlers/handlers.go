@@ -440,6 +440,12 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 	}
 	newCtx = logging.WithResponseStatusHolder(newCtx)
 	newCtx = logging.WithResponseHeadersHolder(newCtx)
+	metadata := logging.GetClientRequestMetadata(newCtx)
+	newCtx = context.WithValue(newCtx, cancellationOriginKey{}, cancellationOrigin{
+		clientFamily: clientFamily(metadata.UserAgent), peerClass: peerClass(metadata.ClientIP),
+		requestDeadline: deadlineClass(requestCtx, requestStarted),
+		parentDeadline:  deadlineClass(parentCtx, requestStarted),
+	})
 
 	cancelCtx := newCtx
 	if requestCtx != nil && requestCtx != parentCtx {

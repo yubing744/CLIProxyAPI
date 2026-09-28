@@ -42,8 +42,12 @@ func TestCancellationTraceSeparatesClientCancellationFromHandlerErrorAfter200(t 
 		requestCtx, requestCancel := context.WithCancel(logging.WithRequestID(context.Background(), "abcdef01"))
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestCtx)
 		c.Request.Header.Set("Authorization", "private credential")
+		c.Request.Header.Set("User-Agent", "Codex/private-user-agent")
+		c.Request.RemoteAddr = "127.0.0.1:23456"
 		handler := &BaseAPIHandler{Cfg: &config.SDKConfig{}}
 		ctx, finish := handler.GetContextWithCancel(nil, c, context.Background())
+		// The watcher must use the immutable snapshot, not mutable Gin headers.
+		c.Request.Header.Set("User-Agent", "curl/private-mutated-agent")
 		c.Writer.WriteHeaderNow()
 		if clientCanceled {
 			requestCancel()
@@ -66,9 +70,15 @@ func TestCancellationTraceSeparatesClientCancellationFromHandlerErrorAfter200(t 
 			if strings.Contains(fmt.Sprint(entry.Data), "private") {
 				t.Fatal("private contents in trace")
 			}
+			if entry.Data["client_family"] != "codex" || entry.Data["peer_class"] != "loopback" || entry.Data["request_deadline"] != "none" || entry.Data["parent_deadline"] != "none" {
+				t.Fatalf("origin snapshot changed: %v", entry.Data)
+			}
 			formatted, formatErr := (&logging.LogFormatter{}).Format(entry)
 			if formatErr != nil || !strings.Contains(string(formatted), "[abcdef01]") || !strings.Contains(string(formatted), "event="+fmt.Sprint(entry.Data["event"])) || !strings.Contains(string(formatted), "elapsed_ms=") || strings.Contains(string(formatted), "private") {
 				t.Fatalf("production formatter lost diagnostic fields: %s (%v)", formatted, formatErr)
+			}
+			if !strings.Contains(string(formatted), "client_family=codex peer_class=loopback request_deadline=none parent_deadline=none") || strings.Contains(string(formatted), "127.0.0.1") {
+				t.Fatalf("origin lost or raw metadata leaked: %s", formatted)
 			}
 			if entry.Data["event"] == "request_context_done" {
 				clientEvents++
@@ -90,5 +100,63 @@ func TestCancellationTraceSeparatesClientCancellationFromHandlerErrorAfter200(t 
 		if returns != 1 || (clientCanceled && clientEvents != 1) {
 			t.Fatalf("returns=%d request events=%d", returns, clientEvents)
 		}
+	}
+}
+
+func TestCancellationOriginClassifiersBoundValues(t *testing.T) {
+	for _, row := range []struct{ value, want string }{
+		{"", "missing"}, {"OpenAI-Python/1.0 private", "openai_python"},
+		{"OpenAI/Node 1.0", "openai_node"}, {"FractalBot private", "fractalbot"},
+		{"python-urllib/3", "python_urllib"}, {"python-requests/2", "python_requests"},
+		{"Go-http-client/1.1", "go_http"}, {"curl/8.0", "curl"},
+		{"arbitrary-private-agent", "other"}, {strings.Repeat("x", 300) + "codex", "other"},
+	} {
+		if got := clientFamily(row.value); got != row.want {
+			t.Fatalf("family got %s want %s", got, row.want)
+		}
+	}
+	for _, row := range []struct{ value, want string }{
+		{"", "missing"}, {"private-host-name", "non_ip"}, {"127.0.0.1", "loopback"},
+		{"::1", "loopback"}, {"::ffff:127.0.0.1", "loopback"}, {"10.0.0.1", "private"},
+		{"fe80::1", "private"}, {"192.0.2.1", "other_ip"},
+	} {
+		if got := peerClass(row.value); got != row.want {
+			t.Fatalf("peer got %s want %s", got, row.want)
+		}
+	}
+	at := time.Now()
+	for _, row := range []struct {
+		remaining time.Duration
+		want      string
+	}{
+		{-time.Second, "expired"}, {5 * time.Second, "le_5s"},
+		{30 * time.Second, "le_30s"}, {120 * time.Second, "le_120s"},
+		{121 * time.Second, "gt_120s"},
+	} {
+		ctx, cancel := context.WithDeadline(context.Background(), at.Add(row.remaining))
+		got := deadlineClass(ctx, at)
+		cancel()
+		if got != row.want {
+			t.Fatalf("deadline got %s want %s", got, row.want)
+		}
+	}
+	if deadlineClass(nil, at) != "none" || deadlineClass(context.Background(), at) != "none" {
+		t.Fatal("missing deadline must not be inferred")
+	}
+}
+
+func TestCancellationOriginSeparatesRequestAndParentDeadlines(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	requestCtx, requestCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer requestCancel()
+	parentCtx, parentCancel := context.WithTimeout(context.Background(), time.Minute)
+	defer parentCancel()
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestCtx)
+	h := &BaseAPIHandler{Cfg: &config.SDKConfig{}}
+	ctx, finish := h.GetContextWithCancel(nil, c, parentCtx)
+	defer finish(nil)
+	origin := ctx.Value(cancellationOriginKey{}).(cancellationOrigin)
+	if origin.requestDeadline != "le_5s" || origin.parentDeadline != "le_120s" {
+		t.Fatalf("independent deadline budgets lost: %+v", origin)
 	}
 }
