@@ -445,6 +445,7 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 		clientFamily: clientFamily(metadata.UserAgent), peerClass: peerClass(metadata.ClientIP),
 		requestDeadline: deadlineClass(requestCtx, requestStarted),
 		parentDeadline:  deadlineClass(parentCtx, requestStarted),
+		transport:       logging.GetTransportConnection(requestCtx),
 	})
 
 	cancelCtx := newCtx

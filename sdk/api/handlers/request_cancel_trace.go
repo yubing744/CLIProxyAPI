@@ -16,6 +16,7 @@ import (
 type cancellationOriginKey struct{}
 type cancellationOrigin struct {
 	clientFamily, peerClass, requestDeadline, parentDeadline string
+	transport                                                logging.TransportConnection
 }
 
 // These are unauthenticated hints, not caller identities. Never log raw UA,
@@ -121,6 +122,11 @@ func logRequestCancellation(ctx context.Context, event string, err error, starte
 		fields["parent_deadline"] = origin.parentDeadline
 		message += fmt.Sprintf(" client_family=%s peer_class=%s request_deadline=%s parent_deadline=%s",
 			origin.clientFamily, origin.peerClass, origin.requestDeadline, origin.parentDeadline)
+		fields["connection_id"] = origin.transport.ID
+		fields["transport_network"] = origin.transport.Network
+		fields["transport_peer_class"] = origin.transport.PeerClass
+		message += fmt.Sprintf(" connection_id=%s transport_network=%s transport_peer_class=%s",
+			origin.transport.ID, origin.transport.Network, origin.transport.PeerClass)
 	}
 	if c != nil && c.Request != nil {
 		fields["request_context"] = cancellationClass(c.Request.Context().Err())
