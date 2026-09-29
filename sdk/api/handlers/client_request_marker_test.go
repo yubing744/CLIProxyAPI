@@ -43,6 +43,20 @@ func TestClientRequestMarkerRejectsRawMetadata(t *testing.T) {
 	if class != "uuid_v4" || digest != fmt.Sprintf("%x", want) {
 		t.Fatal("nonce digest mismatch")
 	}
+	v7 := "12345678-1234-7234-8234-123456789abc"
+	v7class, v7digest := clientRequestMarker([]string{v7})
+	v7want := sha256.Sum256([]byte("ornith-client-request-v1:" + v7))
+	_, v7upper := clientRequestMarker([]string{strings.ToUpper(v7)})
+	if v7class != "uuid_v7" || v7digest != fmt.Sprintf("%x", v7want) || v7upper != v7digest {
+		t.Fatal("v7 canonical digest mismatch")
+	}
+	for _, version := range []int{1, 2, 3, 5, 6, 8} {
+		value := fmt.Sprintf("12345678-1234-%d234-8234-123456789abc", version)
+		class, digest := clientRequestMarker([]string{value})
+		if class != "invalid" || digest != "missing" {
+			t.Fatal("unsupported UUID version accepted")
+		}
+	}
 	_, uppercase := clientRequestMarker([]string{strings.ToUpper(requestNonce)})
 	if digest != uppercase {
 		t.Fatal("canonical case must share a digest")
@@ -53,6 +67,15 @@ func TestClientRequestMarkerRejectsRawMetadata(t *testing.T) {
 // A reused client nonce can join requests across connections; it does not identify
 // a caller or prove why that caller canceled.
 func TestClientRequestMarkerRealTCPAndImmutableSnapshot(t *testing.T) {
+	for _, tc := range []struct{ nonce, class string }{
+		{requestNonce, "uuid_v4"},
+		{"12345678-1234-7234-8234-123456789abc", "uuid_v7"},
+	} {
+		t.Run(tc.class, func(t *testing.T) { testClientMarkerTCP(t, tc.nonce, tc.class) })
+	}
+}
+
+func testClientMarkerTCP(t *testing.T, nonce, class string) {
 	gin.SetMode(gin.TestMode)
 	previous := log.StandardLogger().ReplaceHooks(make(log.LevelHooks))
 	hook := test.NewGlobal()
@@ -78,7 +101,7 @@ func TestClientRequestMarkerRealTCPAndImmutableSnapshot(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/responses", nil)
-		req.Header.Set("X-Client-Request-ID", requestNonce)
+		req.Header.Set("X-Client-Request-ID", nonce)
 		req.Header.Set("Authorization", "private-auth-fixture")
 		transport := &http.Transport{DisableKeepAlives: true}
 		client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
@@ -101,7 +124,7 @@ func TestClientRequestMarkerRealTCPAndImmutableSnapshot(t *testing.T) {
 			t.Fatal("cancellation stalled")
 		}
 	}
-	_, want := clientRequestMarker([]string{requestNonce})
+	_, want := clientRequestMarker([]string{nonce})
 	connections, requests := map[string]bool{}, map[string]bool{}
 	contexts, returns := 0, 0
 	for _, entry := range hook.AllEntries() {
@@ -112,12 +135,12 @@ func TestClientRequestMarkerRealTCPAndImmutableSnapshot(t *testing.T) {
 		if err != nil || !strings.Contains(string(formatted), "client_request_hash="+want) {
 			t.Fatal("formatter lost digest")
 		}
-		for _, secret := range []string{requestNonce, "private-mutated-header", "private-auth-fixture"} {
+		for _, secret := range []string{nonce, "private-mutated-header", "private-auth-fixture"} {
 			if strings.Contains(string(formatted), secret) || strings.Contains(fmt.Sprint(entry.Data), secret) {
 				t.Fatal("raw metadata leaked")
 			}
 		}
-		if entry.Data["client_request_marker"] != "uuid_v4" {
+		if entry.Data["client_request_marker"] != class {
 			t.Fatal("snapshot changed")
 		}
 		connections[fmt.Sprint(entry.Data["connection_id"])] = true

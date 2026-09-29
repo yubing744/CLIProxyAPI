@@ -23,7 +23,7 @@ type cancellationOrigin struct {
 }
 
 // An opt-in request nonce, never an authenticated identity. Accept only one
-// canonical random UUID so arbitrary headers, session IDs and secrets cannot
+// canonical UUIDv4/v7 so arbitrary headers and secrets cannot
 // become log contents. Keep a domain-separated digest, not the original value.
 func clientRequestMarker(values []string) (string, string) {
 	if len(values) == 0 {
@@ -33,11 +33,11 @@ func clientRequestMarker(values []string) (string, string) {
 		return "invalid", "missing"
 	}
 	id, err := uuid.Parse(values[0])
-	if err != nil || id.Version() != 4 || id.Variant() != uuid.RFC4122 || id.String() != strings.ToLower(values[0]) {
+	if err != nil || (id.Version() != 4 && id.Version() != 7) || id.Variant() != uuid.RFC4122 || id.String() != strings.ToLower(values[0]) {
 		return "invalid", "missing"
 	}
 	digest := sha256.Sum256([]byte("ornith-client-request-v1:" + id.String()))
-	return "uuid_v4", fmt.Sprintf("%x", digest)
+	return fmt.Sprintf("uuid_v%d", id.Version()), fmt.Sprintf("%x", digest)
 }
 
 // These are unauthenticated hints, not caller identities. Never log raw UA,
