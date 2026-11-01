@@ -480,6 +480,22 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 					return true
 				}
 			}
+			if isDone && responseFormat == sdktranslator.FormatOpenAIResponse && !openairesponses.CanFinalizeOpenAIChatCompletionsResponseStream(param) {
+				if finishReason := e.configuredStreamEOFFinishReason(auth); finishReason != "" {
+					syntheticTerminal := []byte(`{"choices":[{"index":0,"delta":{},"finish_reason":""}]}`)
+					syntheticTerminal, _ = sjson.SetBytes(syntheticTerminal, "choices.0.finish_reason", finishReason)
+					syntheticLine := append([]byte("data: "), syntheticTerminal...)
+					chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, syntheticLine, &param, claudeInputTokens)
+					for i := range chunks {
+						select {
+						case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
+						case <-ctx.Done():
+							streamAborted = true
+							return true
+						}
+					}
+				}
+			}
 
 			streamLine := append([]byte("data: "), dataPayload...)
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, streamLine, &param, claudeInputTokens)
@@ -550,7 +566,8 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				if finishReason := e.configuredStreamEOFFinishReason(auth); finishReason != "" {
 					syntheticTerminal := []byte(`{"choices":[{"index":0,"delta":{},"finish_reason":""}]}`)
 					syntheticTerminal, _ = sjson.SetBytes(syntheticTerminal, "choices.0.finish_reason", finishReason)
-					chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, syntheticTerminal, &param, claudeInputTokens)
+					syntheticLine := append([]byte("data: "), syntheticTerminal...)
+					chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, syntheticLine, &param, claudeInputTokens)
 					for i := range chunks {
 						select {
 						case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
