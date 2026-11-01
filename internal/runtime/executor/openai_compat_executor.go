@@ -547,6 +547,21 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			// terminal event. Other clean EOFs remain failures.
 			canFinalizeResponsesStream := responseFormat == sdktranslator.FormatOpenAIResponse && openairesponses.CanFinalizeOpenAIChatCompletionsResponseStream(param)
 			if responseFormat == sdktranslator.FormatOpenAIResponse && !canFinalizeResponsesStream {
+				if finishReason := e.configuredStreamEOFFinishReason(auth); finishReason != "" {
+					syntheticTerminal := []byte(`{"choices":[{"index":0,"delta":{},"finish_reason":""}]}`)
+					syntheticTerminal, _ = sjson.SetBytes(syntheticTerminal, "choices.0.finish_reason", finishReason)
+					chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, syntheticTerminal, &param, claudeInputTokens)
+					for i := range chunks {
+						select {
+						case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
+						case <-ctx.Done():
+							return
+						}
+					}
+					canFinalizeResponsesStream = openairesponses.CanFinalizeOpenAIChatCompletionsResponseStream(param)
+				}
+			}
+			if responseFormat == sdktranslator.FormatOpenAIResponse && !canFinalizeResponsesStream {
 				streamErr := statusErr{code: http.StatusBadGateway, msg: "upstream stream closed before [DONE]"}
 				helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
 				reporter.PublishFailure(ctx, streamErr)
@@ -969,6 +984,19 @@ func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth) *con
 		}
 	}
 	return nil
+}
+
+func (e *OpenAICompatExecutor) configuredStreamEOFFinishReason(auth *cliproxyauth.Auth) string {
+	compat := e.resolveCompatConfig(auth)
+	if compat == nil {
+		return ""
+	}
+	switch reason := strings.TrimSpace(compat.StreamEOFFinishReason); reason {
+	case "length", "max_tokens", "content_filter":
+		return reason
+	default:
+		return ""
+	}
 }
 
 func (e *OpenAICompatExecutor) overrideModel(payload []byte, model string) []byte {

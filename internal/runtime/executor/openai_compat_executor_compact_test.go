@@ -998,6 +998,56 @@ func TestOpenAICompatExecutorResponsesStreamFinalizesAfterFinishReasonWithoutDon
 	}
 }
 
+func TestOpenAICompatExecutorResponsesStreamFinalizesConfiguredCleanEOF(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1773896263,"model":"ornith","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{
+		OpenAICompatibility: []config.OpenAICompatibility{{
+			Name:                  "local-ornith",
+			StreamEOFFinishReason: "length",
+		}},
+	})
+	auth := &cliproxyauth.Auth{
+		Provider: "openai-compatibility",
+		Attributes: map[string]string{
+			"base_url":    server.URL + "/v1",
+			"api_key":     "test",
+			"compat_name": "local-ornith",
+		},
+	}
+	request := []byte(`{"model":"ornith","input":"hi","stream":true,"max_output_tokens":3}`)
+	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "ornith",
+		Payload: request,
+	}, cliproxyexecutor.Options{
+		SourceFormat:    sdktranslator.FormatOpenAIResponse,
+		ResponseFormat:  sdktranslator.FormatOpenAIResponse,
+		OriginalRequest: request,
+		Stream:          true,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+
+	var streamed strings.Builder
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("unexpected stream error: %v", chunk.Err)
+		}
+		streamed.Write(chunk.Payload)
+	}
+	if !strings.Contains(streamed.String(), "event: response.incomplete") {
+		t.Fatalf("missing response.incomplete after configured clean EOF: %q", streamed.String())
+	}
+	if !strings.Contains(streamed.String(), `"reason":"max_output_tokens"`) {
+		t.Fatalf("missing max output token reason: %q", streamed.String())
+	}
+}
+
 func TestOpenAICompatExecutorResponsesStreamPreservesUpstreamDataError(t *testing.T) {
 	for _, withDone := range []bool{false, true} {
 		t.Run(fmt.Sprintf("with_done=%t", withDone), func(t *testing.T) {
