@@ -79,6 +79,13 @@ func incompleteByFinishReason(reason string) ([]byte, bool) {
 	}
 }
 
+// CanFinalizeOpenAIChatCompletionsResponseStream reports whether the upstream
+// supplied a finish_reason but omitted only its terminal [DONE] marker.
+func CanFinalizeOpenAIChatCompletionsResponseStream(param any) bool {
+	st, ok := param.(*oaiToResponsesState)
+	return ok && st.Started && !st.CompletedEmitted && strings.TrimSpace(st.FinishReason) != ""
+}
+
 func buildResponsesCompletedEvent(st *oaiToResponsesState, requestRawJSON []byte, nextSeq func() int) []byte {
 	eventType := "response.completed"
 	status := "completed"
