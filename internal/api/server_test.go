@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -453,6 +454,16 @@ func newTestServerWithOptions(t *testing.T, opts ...ServerOption) *Server {
 
 func TestHealthz(t *testing.T) {
 	server := newTestServer(t)
+	if server.server.ConnContext == nil {
+		t.Fatal("production HTTP server lacks transport connection attribution")
+	}
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	connectionCtx := server.server.ConnContext(context.Background(), &bufferedConn{Conn: left})
+	if meta := internallogging.GetTransportConnection(connectionCtx); meta.Network != "pipe" || len(meta.ID) != 32 {
+		t.Fatalf("production multiplexer connection attribution missing: %v", meta)
+	}
 
 	t.Run("GET", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

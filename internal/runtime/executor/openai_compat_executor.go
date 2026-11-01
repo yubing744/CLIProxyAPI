@@ -19,6 +19,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+	openairesponses "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/openai/openai/responses"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
@@ -479,6 +480,22 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 					return true
 				}
 			}
+			if isDone && responseFormat == sdktranslator.FormatOpenAIResponse && !openairesponses.CanFinalizeOpenAIChatCompletionsResponseStream(param) {
+				if finishReason := e.configuredStreamEOFFinishReason(auth); finishReason != "" {
+					syntheticTerminal := []byte(`{"choices":[{"index":0,"delta":{},"finish_reason":""}]}`)
+					syntheticTerminal, _ = sjson.SetBytes(syntheticTerminal, "choices.0.finish_reason", finishReason)
+					syntheticLine := append([]byte("data: "), syntheticTerminal...)
+					chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, syntheticLine, &param, claudeInputTokens)
+					for i := range chunks {
+						select {
+						case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
+						case <-ctx.Done():
+							streamAborted = true
+							return true
+						}
+					}
+				}
+			}
 
 			streamLine := append([]byte("data: "), dataPayload...)
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, streamLine, &param, claudeInputTokens)
@@ -540,9 +557,28 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			case <-ctx.Done():
 			}
 		} else if !seenDone {
-			// Responses clients require an explicit terminal event. Treat a clean
-			// upstream EOF without [DONE] as a failed stream instead of completing it.
-			if responseFormat == sdktranslator.FormatOpenAIResponse {
+			// Responses clients require an explicit terminal event. A provider that
+			// supplied finish_reason but omitted only [DONE] has completed its
+			// generation, so finish translating it into the corresponding Responses
+			// terminal event. Other clean EOFs remain failures.
+			canFinalizeResponsesStream := responseFormat == sdktranslator.FormatOpenAIResponse && openairesponses.CanFinalizeOpenAIChatCompletionsResponseStream(param)
+			if responseFormat == sdktranslator.FormatOpenAIResponse && !canFinalizeResponsesStream {
+				if finishReason := e.configuredStreamEOFFinishReason(auth); finishReason != "" {
+					syntheticTerminal := []byte(`{"choices":[{"index":0,"delta":{},"finish_reason":""}]}`)
+					syntheticTerminal, _ = sjson.SetBytes(syntheticTerminal, "choices.0.finish_reason", finishReason)
+					syntheticLine := append([]byte("data: "), syntheticTerminal...)
+					chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, syntheticLine, &param, claudeInputTokens)
+					for i := range chunks {
+						select {
+						case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
+						case <-ctx.Done():
+							return
+						}
+					}
+					canFinalizeResponsesStream = openairesponses.CanFinalizeOpenAIChatCompletionsResponseStream(param)
+				}
+			}
+			if responseFormat == sdktranslator.FormatOpenAIResponse && !canFinalizeResponsesStream {
 				streamErr := statusErr{code: http.StatusBadGateway, msg: "upstream stream closed before [DONE]"}
 				helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
 				reporter.PublishFailure(ctx, streamErr)
@@ -965,6 +1001,33 @@ func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth) *con
 		}
 	}
 	return nil
+}
+
+func (e *OpenAICompatExecutor) configuredStreamEOFFinishReason(auth *cliproxyauth.Auth) string {
+	compat := e.resolveCompatConfig(auth)
+	if compat == nil && e.cfg != nil {
+		baseURL, _ := e.resolveCredentials(auth)
+		baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+		if baseURL != "" {
+			for i := range e.cfg.OpenAICompatibility {
+				candidate := &e.cfg.OpenAICompatibility[i]
+				if candidate.Disabled || !strings.EqualFold(strings.TrimRight(strings.TrimSpace(candidate.BaseURL), "/"), baseURL) {
+					continue
+				}
+				compat = candidate
+				break
+			}
+		}
+	}
+	if compat == nil {
+		return ""
+	}
+	switch reason := strings.TrimSpace(compat.StreamEOFFinishReason); reason {
+	case "length", "max_tokens", "content_filter":
+		return reason
+	default:
+		return ""
+	}
 }
 
 func (e *OpenAICompatExecutor) overrideModel(payload []byte, model string) []byte {

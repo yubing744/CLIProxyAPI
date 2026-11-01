@@ -685,6 +685,10 @@ type OpenAICompatibility struct {
 
 	// RequestScopedErrors configures custom classification rules for upstream errors.
 	RequestScopedErrors []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
+
+	// StreamEOFFinishReason configures a finish_reason synthesized for a clean
+	// streaming EOF when an upstream omits its terminal marker. Empty disables it.
+	StreamEOFFinishReason string `yaml:"stream-eof-finish-reason,omitempty" json:"stream-eof-finish-reason,omitempty"`
 }
 
 // OpenAICompatibilityAPIKey represents an API key configuration with optional proxy setting.

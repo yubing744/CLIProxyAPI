@@ -49,6 +49,10 @@ func GinLogrusLogger() gin.HandlerFunc {
 		if isAIAPIPath(path) {
 			requestID = GenerateRequestID()
 			SetGinRequestID(c, requestID)
+			// Make the proxy's log ID available to configured upstream header
+			// forwarding, including when the client supplied no request ID.
+			// Overwrite any client value so it cannot impersonate a proxy log ID.
+			c.Request.Header.Set("X-Proxy-Request-ID", requestID)
 			ctx := WithRequestID(c.Request.Context(), requestID)
 			c.Request = c.Request.WithContext(ctx)
 		}
