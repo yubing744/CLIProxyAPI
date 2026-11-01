@@ -1008,15 +1008,15 @@ func TestOpenAICompatExecutorResponsesStreamFinalizesConfiguredCleanEOF(t *testi
 	executor := NewOpenAICompatExecutor("openai-compatibility", &config.Config{
 		OpenAICompatibility: []config.OpenAICompatibility{{
 			Name:                  "local-ornith",
+			BaseURL:               server.URL + "/v1",
 			StreamEOFFinishReason: "length",
 		}},
 	})
 	auth := &cliproxyauth.Auth{
 		Provider: "openai-compatibility",
 		Attributes: map[string]string{
-			"base_url":    server.URL + "/v1",
-			"api_key":     "test",
-			"compat_name": "local-ornith",
+			"base_url": server.URL + "/v1",
+			"api_key":  "test",
 		},
 	}
 	request := []byte(`{"model":"ornith","input":"hi","stream":true,"max_output_tokens":3}`)

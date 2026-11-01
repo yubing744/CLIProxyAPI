@@ -988,6 +988,20 @@ func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth) *con
 
 func (e *OpenAICompatExecutor) configuredStreamEOFFinishReason(auth *cliproxyauth.Auth) string {
 	compat := e.resolveCompatConfig(auth)
+	if compat == nil && e.cfg != nil {
+		baseURL, _ := e.resolveCredentials(auth)
+		baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+		if baseURL != "" {
+			for i := range e.cfg.OpenAICompatibility {
+				candidate := &e.cfg.OpenAICompatibility[i]
+				if candidate.Disabled || !strings.EqualFold(strings.TrimRight(strings.TrimSpace(candidate.BaseURL), "/"), baseURL) {
+					continue
+				}
+				compat = candidate
+				break
+			}
+		}
+	}
 	if compat == nil {
 		return ""
 	}
